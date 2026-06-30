@@ -35,7 +35,7 @@ class Document(Base):
 
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
 
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="documents")
 
