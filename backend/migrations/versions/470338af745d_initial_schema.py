@@ -64,7 +64,7 @@ def upgrade() -> None:
     sa.Column('chroma_doc_ids', sa.Text(), nullable=True),
     sa.Column('chunk_count', sa.Integer(), nullable=True),
     sa.Column('status', sa.String(length=16), nullable=False),
-    sa.Column('error_message', sa.Text(), nullable=False),
+    sa.Column('error_message', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
