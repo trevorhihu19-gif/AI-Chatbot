@@ -1,0 +1,49 @@
+# ── Web Framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.5          # the web framework
+uvicorn[standard]==0.32.1 # the server that runs FastAPI
+python-multipart==0.0.12  # needed for file uploads in FastAPI
+
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36  # ORM — maps Python classes to DB tables
+asyncpg==0.30.0              # async PostgreSQL driver (SQLAlchemy uses this under the hood)
+alembic==1.14.0              # handles DB migrations (creating/changing tables safely)
+psycopg2-binary==2.9.10      # sync PostgreSQL driver — Alembic needs this separately
+
+# ── Auth (Clerk) ───────────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0  # verifies Clerk's JWT tokens
+cryptography==43.0.3              # python-jose depends on this
+
+# ── Validation & Config ────────────────────────────────────────────────────────
+pydantic==2.10.3           # data validation — shapes for requests and responses
+pydantic-settings==2.6.1   # reads .env file into a typed Settings class
+email-validator==2.2.0     # validates email format in Pydantic schemas
+bleach==6.2.0              # strips HTML from user input (XSS prevention)
+
+# ── AI / Agent ─────────────────────────────────────────────────────────────────
+langchain==0.3.13                          # LangChain core
+langchain-community==0.3.13                # community integrations
+langchain-groq==0.2.3                      # Groq LLM integration for LangChain
+langgraph==0.2.59                          # agent orchestration with state graphs
+llama-index==0.12.2                        # RAG framework
+llama-index-vector-stores-chroma==0.4.1    # ChromaDB adapter for LlamaIndex
+llama-index-embeddings-huggingface==0.4.0  # local embedding model (no extra API cost)
+chromadb==0.6.3                            # vector database for semantic search
+
+# ── Hybrid Search ──────────────────────────────────────────────────────────────
+rank-bm25==0.2.2      # BM25 keyword search (the "keyword" half of hybrid search)
+tavily-python==0.5.0  # web search API — what the agent uses to search the internet
+
+# ── Observability ──────────────────────────────────────────────────────────────
+sentry-sdk[fastapi]==2.19.2  # error tracking — sends crashes to Sentry dashboard
+
+# ── Security ───────────────────────────────────────────────────────────────────
+httpx==0.28.1    # async HTTP client — we use this to call Arcjet's API
+slowapi==0.1.9   # rate limiting fallback (if Arcjet is unavailable)
+
+# ── Utilities ──────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1   # loads .env file
+aiofiles==24.1.0       # async file reading/writing
+pypdf==5.1.0           # extract text from PDF uploads
+python-docx==1.1.2     # extract text from DOCX uploads
+structlog==24.4.0      # structured logging (JSON in prod, readable in dev)
+tenacity==9.0.0        # retry logic for flaky external API calls
