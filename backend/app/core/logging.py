@@ -12,23 +12,15 @@ def setup_logging() -> None:
     _setup_structlog()
     _setup_sentry()
 
-def _setup_structlog() -> None:
-    shared_processors: list[Any] = [
-        # Merges any context variables bound earlier in the request
-        structlog.contextvars.merge_contextvars,
-
-        # Adds "level": "info" / "error" etc.
-        structlog.stdlib.add_log_level,
-
-        # Adds "logger": "app.core.database" etc.
-        structlog.stdlib.add_logger_name,
-
-        # Adds "timestamp"
-        structlog.processors.TimeStamper(fmt="iso"),
-
-        # If an exception was passed, formats the traceback
-        structlog.processors.format_exc_info,
-    ]
+        structlog.configure(
+            processors=shared_processors + [renderer],
+            wrapper_class=structlog.make_filtering_bound_logger(
+                logging.DEBUG if settings.debug else logging.INFO
+            ),
+            context_class=dict,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            cache_logger_on_first_use=True,
+        )
 
     if settings.debug:
         # Development: coloured, indented, human-readable
