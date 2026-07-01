@@ -86,7 +86,7 @@ async def integrity_error_handler(
         message = "Database constraint violation"
 
     return make_error_response(
-        code="CONFLICT",
+        code=status_code_to_string(status_code),
         message=message,
         status_code=status_code,
     )
