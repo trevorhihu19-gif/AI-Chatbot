@@ -49,7 +49,7 @@ def _extract_bearer_token(authorization: Optional[str]) -> str:
     
     scheme, _, token = authorization.partition(" ")
 
-    if scheme.low() != "bearer" or not token:
+    if scheme.lower() != "bearer" or not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid format. Expected:Bearer <token>",
