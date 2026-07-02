@@ -100,7 +100,7 @@ async def operational_error_handler(
     sentry_sdk.capture_exception(exc)
     return make_error_response(
         code="DATABASE_ERROR",
-        message="Database temporarily available.Please try again.",
+        message="Database temporarily unavailable.Please try again.",
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE
     )
 
