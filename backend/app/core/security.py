@@ -250,6 +250,11 @@ def sanitize_text(text: str) -> str:
 def sanitize_filename(filename: str) -> str:
     name = filename.replace("/", "_").replace("\\", "_").replace("..", "_")
     name = re.sub(r"[^\w\-.]", "_", name)
+    if not name or name in {".", ".."}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid filename",
+        )
     return name
 
 def verify_clerk_webhook(
