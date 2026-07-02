@@ -74,19 +74,21 @@ async def integrity_error_handler(
         error=str(exc.orig)
     )
     orig = str(exc.orig).lower()
+    status_code = status.HTTP_409_CONFLICT
     if "unique" in orig:
-        message = "A record with this details already exists"
+        message = "A record with these details already exists"
     elif "foreign key" in orig:
         message = "Referenced resource not found"
     elif "not null" in orig:
         message = "A required field is missing"
+        status_code = status.HTTP_400_BAD_REQUEST
     else:
         message = "Database constraint violation"
 
     return make_error_response(
-        code="CONFLICT",
+        code=status_code_to_string(status_code),
         message=message,
-        status_code=status.HTTP_409_CONFLICT,
+        status_code=status_code,
     )
 
 async def operational_error_handler(
