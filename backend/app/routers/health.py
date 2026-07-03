@@ -24,6 +24,10 @@ async def health_check():
 
     all_healthy = db_health["status"] == "healthy"
 
+    if not all_healthy:
+        logger.warning("health_check.db_unhealthy", error=db_health.get("error"))
+        db_health = {"status": db_health["status"]}
+
     return JSONResponse(
         status_code=200 if all_healthy else 503,
         content={

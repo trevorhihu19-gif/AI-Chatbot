@@ -24,7 +24,7 @@ async def clerk_webhook(
     db: AsyncSession = Depends(get_db),
     svix_id: str = Header(None, alias="svix-id"),
     svix_timestamp: str = Header(None, alias="svix-timestamp"),
-    svix_signature: str = Header(None, alias="svx-signature")
+    svix_signature: str = Header(None, alias="svix-signature")
 ):
     payload = await request.body()
 
@@ -44,7 +44,7 @@ async def clerk_webhook(
         await _create_user(db, data)
     elif event_type == "user.updated":
         await _update_user(db, data)
-    elif event_type == "user.delete":
+    elif event_type == "user.deleted":
         await _delete_user(db, data)
     else:
         logger.debug("webhook.unhandled", event_type=event_type)
