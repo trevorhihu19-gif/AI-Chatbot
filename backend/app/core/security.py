@@ -59,7 +59,7 @@ def _extract_bearer_token(authorization: Optional[str]) -> str:
     
     scheme, _, token = authorization.partition(" ")
 
-    if scheme.low() != "bearer" or not token:
+    if scheme.lower() != "bearer" or not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid format. Expected:Bearer <token>",
@@ -272,6 +272,11 @@ def sanitize_text(text: str) -> str:
 def sanitize_filename(filename: str) -> str:
     name = filename.replace("/", "_").replace("\\", "_").replace("..", "_")
     name = re.sub(r"[^\w\-.]", "_", name)
+    if not name or name in {".", ".."}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid filename",
+        )
     return name
 
 WEBHOOK_TIMESTAMP_TOLERANCE = 300
