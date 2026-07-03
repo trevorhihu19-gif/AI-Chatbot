@@ -24,7 +24,7 @@ async def clerk_webhook(
     db: AsyncSession = Depends(get_db),
     svix_id: str = Header(None, alias="svix-id"),
     svix_timestamp: str = Header(None, alias="svix-timestamp"),
-    svix_signature: str = Header(None, alias="svx-signature")
+    svix_signature: str = Header(None, alias="svix-signature")
 ):
     payload = await request.body()
 
