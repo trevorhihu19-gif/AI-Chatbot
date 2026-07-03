@@ -109,11 +109,12 @@ async def verify_clerk_token(token: str) -> dict:
     
 #ARCJET PROTECTION
 async def arcject_protect(
-        request: Request,
-        user_id: Optional[str] = None,
+    request: Request,
+    user_id: Optional[str] = None,
 ) -> None:
     if not settings.arcjet_key:
         return
+
     client_ip = request.client.host if request.client else "unknown"
 
     payload = {
@@ -129,7 +130,7 @@ async def arcject_protect(
                 "mode": "LIVE",
                 "characteristics": ["userId"] if user_id else ["ip"],
                 "window": "60s",
-                "max": 60,  
+                "max": 60,
             },
             {
                 "type": "BOT",
@@ -150,43 +151,72 @@ async def arcject_protect(
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {settings.arcjet_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
             )
-            decision = response.json()
-        verdict = decision.get("conclusion")
-        if verdict not in {"ALLOW", "DENY"}:
-            raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Invalid security service response.",
-        )
 
-        if verdict == "DENY":
+        decision = response.json()
+        verdict = decision.get("conclusion")
+
+        if verdict == "ALLOW":
+            return
+
+        elif verdict == "DENY":
             reason = decision.get("reason", {})
+
             if reason.get("isRateLimit"):
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Too many requests. Please slow down.",
                     headers={"Retry-After": "60"},
                 )
+
             if reason.get("isBot"):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Automated requests are not allowed",
                 )
+
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Request blocked by security policy",
             )
 
+        elif verdict == "CHALLENGE":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Additional verification required.",
+            )
+
+        elif verdict == "ERROR":
+            logger.warning(
+                "arcjet.error_response",
+                client_ip=client_ip,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Security service temporarily unavailable.",
+            )
+
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Invalid security service response.",
+            )
+
     except HTTPException:
-        raise 
+        raise
+
     except Exception as exc:
-        logger.error("arcjet.failed", error=str(exc), client_ip=client_ip)
+        logger.error(
+            "arcjet.failed",
+            error=str(exc),
+            client_ip=client_ip,
+        )
         raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="Security verification failed.",
-    )
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Security verification failed.",
+        )
 
 #AUTH DEPENDENCY
 async def get_current_user(
