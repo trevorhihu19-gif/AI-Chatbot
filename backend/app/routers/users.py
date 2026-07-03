@@ -44,7 +44,7 @@ async def clerk_webhook(
         await _create_user(db, data)
     elif event_type == "user.updated":
         await _update_user(db, data)
-    elif event_type == "user.delete":
+    elif event_type == "user.deleted":
         await _delete_user(db, data)
     else:
         logger.debug("webhook.unhandled", event_type=event_type)
