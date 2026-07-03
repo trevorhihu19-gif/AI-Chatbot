@@ -6,43 +6,16 @@ import structlog
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
+
 from app.core.config import settings
 
 def setup_logging() -> None:
     _setup_structlog()
     _setup_sentry()
 
-        structlog.configure(
-            processors=shared_processors + [renderer],
-            wrapper_class=structlog.make_filtering_bound_logger(
-                logging.DEBUG if settings.debug else logging.INFO
-            ),
-            context_class=dict,
-            logger_factory=structlog.stdlib.LoggerFactory(),
-            cache_logger_on_first_use=True,
-        )
 
-    if settings.debug:
-        # Development: coloured, indented, human-readable
-        renderer = structlog.dev.ConsoleRenderer(colors=True)
-    else:
-        # Production: one JSON object per line
-        renderer = structlog.processors.JSONRenderer()
-
-    structlog.configure(
-        processors=shared_processors + [renderer],
-        # Sets the minimum log level based on environment
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.DEBUG if settings.debug else logging.INFO
-        ),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(sys.stdout),
-        # Cache the logger after first use — performance optimisation
-        cache_logger_on_first_use=True,
-    )
-
-    # Also configure Python's built-in logging to flow through structlog
-    # This captures logs from SQLAlchemy, httpx, and other libraries
+def _setup_structlog() -> None:
+    # 1. Initialize Python's built-in logging first so the factory has a target
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
@@ -53,9 +26,46 @@ def setup_logging() -> None:
     for noisy_logger in ["httpx", "httpcore", "asyncio", "multipart"]:
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
+    #  Define the shared processors list
+    shared_processors: list[Any] = [
+        # Merges any context variables bound earlier in the request
+        structlog.contextvars.merge_contextvars,
+
+        # Adds "level": "info" / "error" etc.
+        structlog.stdlib.add_log_level,
+
+        # Adds "logger": "app.core.database" etc. (Requires stdlib.LoggerFactory)
+        structlog.stdlib.add_logger_name,
+
+        # Adds "timestamp": 
+        structlog.processors.TimeStamper(fmt="iso"),
+
+        # If an exception was passed, formats the traceback
+        structlog.processors.format_exc_info,
+    ]
+
+    if settings.debug:
+        # Development: coloured, indented, human-readable
+        renderer = structlog.dev.ConsoleRenderer(colors=True)
+    else:
+        # Production: one JSON object per line
+        renderer = structlog.processors.JSONRenderer()
+
+    # 3. Configure structlog to play nice with the standard library and Sentry
+    structlog.configure(
+        processors=shared_processors + [renderer],
+        # Use standard library wrapper class for seamless integration
+        wrapper_class=structlog.stdlib.BoundLogger,
+        context_class=dict,
+        # Switched factory to use stdlib instead of PrintLogger to fix the AttributeError
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        # Cache the logger after first use — performance optimisation
+        cache_logger_on_first_use=True,
+    )
+
+
 def _setup_sentry() -> None:
     if not settings.sentry_dsn:
-        # No DSN configured — skip Sentry entirely
         return
 
     sentry_sdk.init(
@@ -81,9 +91,11 @@ def _setup_sentry() -> None:
                 event_level=logging.ERROR,
             ),
         ],
+
         # Don't send personally identifiable information
         send_default_pii=False,
     )
+
 
 def capture_exception(exc: Exception, context: dict | None = None) -> None:
     if context:

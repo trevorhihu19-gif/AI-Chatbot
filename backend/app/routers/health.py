@@ -1,4 +1,5 @@
 import structlog
+import asyncio
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -10,7 +11,17 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health_check():
-    db_health = await check_db_health()
+    try:
+        db_health = await asyncio.wait_for(
+            check_db_health(),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        db_health = {
+            "status": "unhealthy",
+            "message": "Database health check timed out",
+        }
+
     all_healthy = db_health["status"] == "healthy"
 
     return JSONResponse(

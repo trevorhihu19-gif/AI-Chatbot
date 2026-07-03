@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     clerk_webhook_secret: str
 
     groq_api_key: str
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     groq_temperature: float = 0.7
 
     tavily_api_key: str
