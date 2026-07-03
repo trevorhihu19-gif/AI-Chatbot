@@ -6,6 +6,7 @@ import structlog
 import hmac
 import hashlib
 import base64
+import time
 from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from slowapi import Limiter
@@ -23,11 +24,20 @@ limiter = Limiter(key_func=get_remote_address)
 
 #CLERK JWT VERIFICATION
 _jwks_cache: Optional[dict] = None
+_jwks_cache_updated_at: float = 0.0
+JWKS_CACHE_TTL = 3600  
 
-async def _get_clerk_public_keys() -> dict:
-    global _jwks_cache
-    if _jwks_cache:
+async def _get_clerk_public_keys(force_refresh: bool = False) -> dict:
+    global _jwks_cache, _jwks_cache_updated_at
+    now = time.time()
+    has_valid_cache =  (
+        _jwks_cache is not None
+        and (now - _jwks_cache_updated_at) < JWKS_CACHE_TTL
+    )
+
+    if has_valid_cache and not force_refresh:
         return _jwks_cache
+
     
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -79,6 +89,7 @@ async def verify_clerk_token(token: str) -> dict:
             token,
             public_key,
             algorithms=["RS256"],
+            issuer=settings.clerk_issuer,
             options={"verify_aud": False}
         )
         return payload
@@ -143,7 +154,12 @@ async def arcject_protect(
                 },
             )
             decision = response.json()
-        verdict = decision.get("conclusion", "ALLOW")
+        verdict = decision.get("conclusion")
+        if verdict not in {"ALLOW", "DENY"}:
+            raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Invalid security service response.",
+        )
 
         if verdict == "DENY":
             reason = decision.get("reason", {})
@@ -167,6 +183,10 @@ async def arcject_protect(
         raise 
     except Exception as exc:
         logger.error("arcjet.failed", error=str(exc), client_ip=client_ip)
+        raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Security verification failed.",
+    )
 
 #AUTH DEPENDENCY
 async def get_current_user(
@@ -191,6 +211,8 @@ async def get_current_user(
     )
     user = result.scalar_one_or_none()
 
+    hashed_clerk_id = hashlib.sha256(clerk_id.encode()).hexdigest()[:12]
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -203,7 +225,7 @@ async def get_current_user(
             detail="Account is deactivated.Contact support"
         )
     
-    logger.info("auth.success", clerk_id=clerk_id)
+    logger.info("auth.success", user=hashed_clerk_id)
     return user
 
 #INPUT SANITIZATION
@@ -252,12 +274,24 @@ def sanitize_filename(filename: str) -> str:
     name = re.sub(r"[^\w\-.]", "_", name)
     return name
 
+WEBHOOK_TIMESTAMP_TOLERANCE = 300
+
 def verify_clerk_webhook(
-        payload: bytes,
-        svix_id: str,
-        svix_timestamp: str,
-        svix_signature: str,
+    payload: bytes,
+    svix_id: str,
+    svix_timestamp: str,
+    svix_signature: str,
 ) -> bool:
+    try:
+        timestamp = int(svix_timestamp)
+    except (TypeError, ValueError):
+        return False
+
+    now = int(time.time())
+
+    if abs(now - timestamp) > WEBHOOK_TIMESTAMP_TOLERANCE:
+        return False
+
     signed_content = f"{svix_id}.{svix_timestamp}.{payload.decode()}"
 
     secret = base64.b64decode(
@@ -269,6 +303,7 @@ def verify_clerk_webhook(
         signed_content.encode(),
         hashlib.sha256,
     ).digest()
+
     expected_b64 = base64.b64encode(expected).decode()
 
     for sig in svix_signature.split(" "):
