@@ -254,55 +254,54 @@ async def run_agent_streaming(
     final_citations = []
 
     try:
-         async for event in graph.astream_events(initial_state, version="v2"):
-            event_type = event.get("event", "")
-            event_name = event.get("name", "")
-            data = event.get("data", {})
+        async for event in graph.astream_events(initial_state, version="v2"):
+         event_type = event.get("event", "")
+        event_name = event.get("name", "")
+        data = event.get("data", {})
 
-            #  Individual token from the LLM 
-            if event_type == "on_chat_model_stream":
-                chunk = data.get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    yield {
-                        "type": "token",
-                        "content": chunk.content,
-                    }
-
-            elif event_type == "on_tool_start":
+        # Individual token from the LLM
+        if event_type == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            if chunk and hasattr(chunk, "content") and chunk.content:
                 yield {
-                    "type": "tool_start",
-                    "tool_name": event_name,
-                }
-            elif event_type == "on_tool_end":
-                output = data.get("output", {})
-                citations = []
-                if isinstance(output, dict):
-                    citations = output.get("citations", [])
-                    final_citations.extend(citations)
-
-                yield {
-                    "type": "tool_end",
-                    "tool_name": event_name,
-                    "citations": citations,
+                    "type": "token",
+                    "content": chunk.content,
                 }
 
-            # State update (captures citations from tool_node) 
-            elif event_type == "on_chain_end" and event_name == "tool_node":
-                output_state = data.get("output", {})
-                if isinstance(output_state, dict):
-                    final_citations.extend(
-                        output_state.get("citations", [])
-                    )
+        elif event_type == "on_tool_start":
+            yield {
+                "type": "tool_start",
+                "tool_name": event_name,
+            }
+
+        elif event_type == "on_tool_end":
+            output = data.get("output", {})
+            citations = []
+            if isinstance(output, dict):
+                citations = output.get("citations", [])
+                final_citations.extend(citations)
 
             yield {
-            "type": "done",
-            "citations": final_citations,
-        }
+                "type": "tool_end",
+                "tool_name": event_name,
+                "citations": citations,
+            }
+
+        # State update (captures citations from tool_node)
+        elif event_type == "on_chain_end" and event_name == "tool_node":
+            output_state = data.get("output", {})
+            if isinstance(output_state, dict):
+                final_citations = list(output_state.get("citations", []))
+
+    # Emit completion once after all events have been processed.
+        yield {
+        "type": "done",
+        "citations": final_citations,
+    }
 
     except Exception as e:
-        logger.error("agent.stream.error", error=str(e))
-        yield {
-            "type": "error",
-            "error": str(e),
-        }
-
+     logger.error("agent.stream.error", error=str(e))
+     yield {
+        "type": "error",
+        "error": str(e)
+    }
