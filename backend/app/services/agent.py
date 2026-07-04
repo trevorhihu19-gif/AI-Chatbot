@@ -106,7 +106,7 @@ async def agent_node(state: AgentState, llm_with_tools) -> dict:
     This is the "brain" of the agent.
     """
     messages = _trim_history(state["messages"])
-    full_messages = [SystemMessage(content=SyntaxWarning)] + list(messages)
+    full_messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
 
     logger.info(
         "agent.invoke_llm",
