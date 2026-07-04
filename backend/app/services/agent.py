@@ -160,8 +160,7 @@ async def tool_node(state: AgentState) -> dict:
                     result = str(raw_result)
             except Exception as e:
                 logger.error("agent.tool_error", tool=tool_name, error=str(e))
-                result = f"Tool error: {str(e)}"
-
+                result = "The tool encountered an error and could not complete the request."
         tool_messages.append(
             ToolMessage(
                 content=result,
