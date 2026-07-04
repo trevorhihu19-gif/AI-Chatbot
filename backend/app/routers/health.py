@@ -19,7 +19,7 @@ async def health_check():
     except asyncio.TimeoutError:
         db_health = {
             "status": "unhealthy",
-            "message": "Database health check timed out",
+            "error": "Database health check timed out",
         }
 
     all_healthy = db_health["status"] == "healthy"
