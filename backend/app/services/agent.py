@@ -106,7 +106,7 @@ async def agent_node(state: AgentState, llm_with_tools) -> dict:
     This is the "brain" of the agent.
     """
     messages = _trim_history(state["messages"])
-    full_messages = [SystemMessage(content=SyntaxWarning)] + list(messages)
+    full_messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
 
     logger.info(
         "agent.invoke_llm",
@@ -160,8 +160,7 @@ async def tool_node(state: AgentState) -> dict:
                     result = str(raw_result)
             except Exception as e:
                 logger.error("agent.tool_error", tool=tool_name, error=str(e))
-                result = f"Tool error: {str(e)}"
-
+                result = "The tool encountered an error and could not complete the request."
         tool_messages.append(
             ToolMessage(
                 content=result,
