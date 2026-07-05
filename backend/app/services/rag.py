@@ -168,7 +168,7 @@ async def _embed_and_store(
 ) -> list[str]:
     client = get_chroma_client()
     collection = get_or_create_collection(client)
-    embedding_model = get_embedding_model
+    embedding_model = get_embedding_model()
 
     chunk_ids = [f"{document_id}_chunk_{i}" for i in range(len(chunks))]
 
