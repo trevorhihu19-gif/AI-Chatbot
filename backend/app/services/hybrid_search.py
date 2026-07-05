@@ -83,10 +83,10 @@ async def _vector_search(
 
     #Search ChromaDB
     results = collection.query(
-        query_embedding=[query_embedding],
+        query_embeddings=[query_embedding],
         n_results=top_k,
         where={"user_id": user_id},
-        includes=["documents", "metadatas", "distances"]
+        include=["documents", "metadatas", "distances"]
     )
 
     chunks = []
