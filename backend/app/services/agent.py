@@ -12,6 +12,8 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
+from app.services.web_search import web_search_tool
+from app.services.rag import make_rag_tool
 from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
@@ -62,22 +64,20 @@ def _build_llm(tools: list = []) -> ChatGroq:
         return llm.bind_tools(tools)
     return llm
 
-def _get_tools(use_web_search: bool, use_rag: bool) -> list:
+def _get_tools(use_web_search: bool, use_rag: bool, user_id: str = "") -> list:
     """
     Return only the tools the user has enabled.
     """
     tools = []
 
-    if use_rag:
+    if use_rag and user_id:
         try:
-            from app.services.rag import rag_search_tool
-            tools.append(rag_search_tool)
+            tools.append(make_rag_tool(user_id))
         except Exception as e:
             logger.warning("agent.rag_tool.unavailable", error=str(e))
     
     if use_web_search:
         try:
-            from app.services.web_search import web_search_tool
             tools.append(web_search_tool)
         except Exception as e:
             logger.warning("agent.web_search_tool.unavailable", error=str(e))
@@ -188,7 +188,11 @@ def should_use_tools(state: AgentState) -> str:
         return "tool_node"
     return END
 
-def build_agent_graph(use_web_search: bool = False, use_rag: bool = True):
+def build_agent_graph(
+        use_web_search: bool = False,
+        use_rag: bool = True,
+        user_id: str = ""
+        ):
     """
     Builds and compiles the LangGraph state graph.
 
@@ -198,7 +202,7 @@ def build_agent_graph(use_web_search: bool = False, use_rag: bool = True):
     Performance: graph compilation is fast (1ms).
     The expensive part is the LLM call inside agent_node.
     """
-    tools = _get_tools(use_web_search=use_web_search, use_rag=use_rag)
+    tools = _get_tools(use_web_search=use_web_search, use_rag=use_rag, user_id=user_id)
     llm = _build_llm(tools=tools)
 
     graph = StateGraph(AgentState)
@@ -239,7 +243,8 @@ async def run_agent_streaming(
     """
     graph = build_agent_graph(
         use_web_search=use_web_search,
-        use_rag=use_rag
+        use_rag=use_rag,
+        user_id=user_id
     )
 
     initial_state: AgentState = {
@@ -255,53 +260,50 @@ async def run_agent_streaming(
 
     try:
         async for event in graph.astream_events(initial_state, version="v2"):
-         event_type = event.get("event", "")
-        event_name = event.get("name", "")
-        data = event.get("data", {})
+            event_type = event.get("event", "")
+            event_name = event.get("name", "")
+            data = event.get("data", {})
 
-        # Individual token from the LLM
-        if event_type == "on_chat_model_stream":
-            chunk = data.get("chunk")
-            if chunk and hasattr(chunk, "content") and chunk.content:
+            # Individual token from the LLM
+            if event_type == "on_chat_model_stream":
+                chunk = data.get("chunk")
+                if chunk and hasattr(chunk, "content") and chunk.content:
+                    yield {
+                        "type": "token",
+                        "content": chunk.content,
+                    }
+            elif event_type == "on_tool_start":
                 yield {
-                    "type": "token",
-                    "content": chunk.content,
+                    "type": "tool_start",
+                    "tool_name": event_name,
                 }
-
-        elif event_type == "on_tool_start":
-            yield {
-                "type": "tool_start",
-                "tool_name": event_name,
-            }
-
-        elif event_type == "on_tool_end":
-            output = data.get("output", {})
-            citations = []
-            if isinstance(output, dict):
-                citations = output.get("citations", [])
-                final_citations.extend(citations)
-
-            yield {
-                "type": "tool_end",
-                "tool_name": event_name,
-                "citations": citations,
-            }
-
-        # State update (captures citations from tool_node)
-        elif event_type == "on_chain_end" and event_name == "tool_node":
-            output_state = data.get("output", {})
-            if isinstance(output_state, dict):
-                final_citations = list(output_state.get("citations", []))
-
-    # Emit completion once after all events have been processed.
+            elif event_type == "on_tool_end":
+                output = data.get("output", {})
+                citations = []
+                if isinstance(output, dict):
+                    citations = output.get("citations", [])
+                    final_citations.extend(citations)
+                yield {
+                    "type": "tool_end",
+                    "tool_name": event_name,
+                    "citations": citations,
+                }
+            # State update (captures citations from tool_node)
+            elif event_type == "on_chain_end" and event_name == "tool_node":
+                output_state = data.get("output", {})
+                if isinstance(output_state, dict):
+                    final_citations = list(output_state.get("citations", []))
+        # Emit completion once after all events have been processed.
         yield {
-        "type": "done",
-        "citations": final_citations,
-    }
+            "type": "done",
+            "citations": final_citations,
+        }
 
     except Exception as e:
-     logger.error("agent.stream.error", error=str(e))
-     yield {
-        "type": "error",
-        "error": str(e)
-    }
+        logger.error("agent.stream.error", error=str(e))
+        yield {
+            "type": "error",
+            "error": str(e)     
+        }
+
+    
