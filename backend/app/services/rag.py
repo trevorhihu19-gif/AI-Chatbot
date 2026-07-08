@@ -93,14 +93,17 @@ async def ingest_document(
         filename: str,
 ) -> None:
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Document).where(Document.id == uuid.UUID(document_id))
-        )
-        doc = result.scalar_one_or_none()
+        try:
+            result = await db.execute(
+                select(Document).where(Document.id == uuid.UUID(document_id))
+            )
+            doc = result.scalar_one_or_none()
+        except Exception as e:
+            logger.error("ingest.lookup_failed", document_id=document_id, error=str(e))
+            return
         if not doc:
             logger.error("ingest.document_not_found", document_id=document_id)
             return
-        
         try:
             doc.status = "processing"
             await db.commit()
