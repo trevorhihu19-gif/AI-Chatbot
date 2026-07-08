@@ -64,8 +64,10 @@ def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OV
     if not words:
         return []
     
-    words_per_chunk = int(chunk_size * 0.7)
+    words_per_chunk = int(chunk_size * 0.75)
     words_overlap = int(overlap * 0.75)
+    if words_overlap >= words_per_chunk:
+        raise ValueError("overlap must be smaller than chunk_size")
 
     chunks = []
     start = 0
@@ -114,7 +116,7 @@ async def ingest_document(
             )
 
             #Extract text (CPU bound)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             raw_text = await loop.run_in_executor(
                 None,
                 lambda:_extract_text(file_path, file_type)
@@ -150,25 +152,37 @@ async def ingest_document(
                 chunk_count=len(chunks)
             )
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "ingest.failed",
                 document_id=document_id,
                 error=str(e),
             )
+
+    # Clear any failed transaction before recording failure state.
+            await db.rollback()
+
             doc.status = "failed"
             doc.error_message = str(e)
+
             await db.commit()
 
 
 async def _embed_and_store(
-        chunks: list[str],
-        document_id: str,
-        user_id: str,
-        filename: str,
+    chunks: list[str],
+    document_id: str,
+    user_id: str,
+    filename: str,
 ) -> list[str]:
     client = get_chroma_client()
-    collection = get_or_create_collection(client)
-    embedding_model = get_embedding_model()
+
+    loop = asyncio.get_running_loop()
+
+    collection = await loop.run_in_executor(
+        None,
+        lambda: get_or_create_collection(client),
+    )
+
+    embedding_model = get_embedding_model
 
     chunk_ids = [f"{document_id}_chunk_{i}" for i in range(len(chunks))]
 
@@ -183,32 +197,35 @@ async def _embed_and_store(
     ]
 
     BATCH_SIZE = 32
-    loop = asyncio.get_event_loop()
 
     for batch_start in range(0, len(chunks), BATCH_SIZE):
         batch_chunks = chunks[batch_start:batch_start + BATCH_SIZE]
         batch_ids = chunk_ids[batch_start:batch_start + BATCH_SIZE]
-        batch_metadats = metadatas[batch_start:batch_start + BATCH_SIZE]
+        batch_metadatas = metadatas[batch_start:batch_start + BATCH_SIZE]
 
         embeddings = await loop.run_in_executor(
             None,
             lambda b=batch_chunks: [
                 embedding_model.get_text_embedding(chunk)
                 for chunk in b
-            ]
+            ],
         )
 
-        collection.add(
-            ids=batch_ids,
-            embeddings=embeddings,
-            documents=batch_chunks,
-            metadatas=batch_metadats
+        await loop.run_in_executor(
+            None,
+            lambda: collection.add(
+                ids=batch_ids,
+                embeddings=embeddings,
+                documents=batch_chunks,
+                metadatas=batch_metadatas,
+            ),
         )
 
         logger.info(
             "ingest.batch_stored",
-            batch=f"{batch_start}-{batch_start + len(batch_chunks)}"
+            batch=f"{batch_start}-{batch_start + len(batch_chunks)}",
         )
+
     return chunk_ids
 
 async def delete_document_vectors(document_id: str, chroma_doc_ids: list[str]) -> None:
