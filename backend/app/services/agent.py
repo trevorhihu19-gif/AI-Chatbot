@@ -12,7 +12,7 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
-from app.services.web_search import web_search_tool
+from app.services.web_search import web_search_tool, web_search_advanced_tool
 from app.services.rag import make_rag_tool
 from app.core.config import settings
 
@@ -79,6 +79,7 @@ def _get_tools(use_web_search: bool, use_rag: bool, user_id: str = "") -> list:
     if use_web_search:
         try:
             tools.append(web_search_tool)
+            tools.append(web_search_advanced_tool)
         except Exception as e:
             logger.warning("agent.web_search_tool.unavailable", error=str(e))
 
@@ -132,7 +133,7 @@ async def tool_node(state: AgentState) -> dict:
     if not tool_calls:
         return {"messages": []}
     
-    tools = _get_tools(state["use_web_search"], state["use_rag"])
+    tools = _get_tools(state["use_web_search"], state["use_rag"],state.get("user_id", ""))
     tool_map = {t.name: t for t in tools}
 
     tool_messages = []

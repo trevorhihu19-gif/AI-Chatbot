@@ -17,8 +17,8 @@ class ChatRequest(BaseModel):
     use_web_search: bool = False
     use_rag: bool = True
 
-    `@field_validator`("message", mode="before")
-    `@classmethod`
+    @field_validator("message", mode="before")
+    @classmethod
     def strip_whitespace(cls, v: str) -> str:
         return v.strip() if isinstance(v, str) else v
     

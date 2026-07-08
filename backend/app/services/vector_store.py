@@ -1,15 +1,3 @@
-import structlog
-import chromadb
-from chromadb.config import Settings as ChromaSettings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from app.core.config import settings
-
-logger = structlog.get_logger(__name__)
-
-DOCUMENTS_COLLECTION = "surge_documents"
-
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-
 from functools import lru_cache
 import structlog
 import chromadb
@@ -23,7 +11,13 @@ DOCUMENTS_COLLECTION = "surge_documents"
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-`@lru_cache`(maxsize=1)
+logger = structlog.get_logger(__name__)
+
+DOCUMENTS_COLLECTION = "surge_documents"
+
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+@lru_cache(maxsize=1)
 def get_chroma_client() -> chromadb.HttpClient:
     client = chromadb.HttpClient(
         host=settings.chroma_host,
@@ -32,7 +26,7 @@ def get_chroma_client() -> chromadb.HttpClient:
     )
     return client
 
-`@lru_cache`(maxsize=1)
+@lru_cache(maxsize=1)
 def get_or_create_collection(client: chromadb.HttpClient) -> chromadb.Collection:
     collection = client.get_or_create_collection(
         name=DOCUMENTS_COLLECTION,
@@ -45,6 +39,6 @@ def get_or_create_collection(client: chromadb.HttpClient) -> chromadb.Collection
     )
     return collection
 
-`@lru_cache`(maxsize=1)
+@lru_cache(maxsize=1)
 def get_embedding_model():
     return HuggingFaceEmbedding(model_name=EMBEDDING_MODEL)
