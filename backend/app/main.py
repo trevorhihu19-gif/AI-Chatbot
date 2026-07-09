@@ -14,7 +14,7 @@ from app.core.database import close_db, init_db
 from app.core.errors import register_error_handlers
 from app.core.logging import setup_logging
 from app.core.security import limiter
-from app.routers import health, users, chat
+from app.routers import health, users, chat, documents
 
 logger = structlog.get_logger(__name__)
 
@@ -97,6 +97,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(users.router, prefix=API_PREFIX)
     app.include_router(chat.router, prefix=API_PREFIX)
+    app.include_router(documents.router, prefix=API_PREFIX)
 
     logger.info(
         "surge.routes_registered",

@@ -93,9 +93,9 @@ async def _web_search(
         max_results=max_results
     )
 
-    try:
-        client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+    client = AsyncTavilyClient(api_key=settings.tavily_api_key)
 
+    try:
         response = await client.search(
             query=clean_query,
             search_depth=search_depth,
@@ -105,6 +105,7 @@ async def _web_search(
         )
 
         results = response.get("results", [])
+        total_results = len(results)
 
         results = [
             r for r in results
@@ -114,7 +115,7 @@ async def _web_search(
         logger.info(
             "web_search.complete",
             query=clean_query[:100],
-            total_results=len(response.get("results")),
+            total_results=total_results,
             filtered_results=len(results)
         )
 
@@ -131,7 +132,7 @@ async def _web_search(
     except Exception as e:
         logger.error("web_search.error", query=clean_query[:100], error=str(e))
         return {
-            "content": f"Web search is temporarily unavailable: {str(e)}",
+            "content": "Web search is temporarily unavailable. Please try again shortly.",
             "citations": []
         }
     

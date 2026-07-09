@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db, transaction
+from app.core.database import get_db, transaction, AsyncSessionLocal
 from app.core.security import get_current_user, sanitize_text
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -75,7 +75,7 @@ async def _load_history(
         .order_by(desc(Message.created_at))
         .limit(MAX_HISTORY)
     )
-    messages = result.scalars().all()
+    messages = list(reversed(result.scalars().all()))
 
     history = []
     for msg in messages:
@@ -115,6 +115,14 @@ async def stream_chat(
         select(UsageCredit).where(UsageCredit.user_id == current_user.id)
     )
     usage = usage_result.scalar_one_or_none()
+
+    # Ensure every user has a usage record
+    if usage is None:
+        usage = UsageCredit(user_id=current_user.id)
+        db.add(usage)
+        await db.commit()
+        await db.refresh(usage)
+
     if usage and usage.is_exhausted:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -155,10 +163,10 @@ async def stream_chat(
             message=clean_message,
             history=history,
             user=current_user,
-            conversation=conversation,
+            conversation_id=conversation.id,
             use_rag=request_body.use_rag,
             use_web_search=request_body.use_web_search,
-            db=db
+            session_factory=AsyncSessionLocal,
         ),
         media_type="text/event-stream",
         headers={
@@ -169,13 +177,13 @@ async def stream_chat(
     )
 
 async def _generate_sse_stream(
-        message: str,
-        history: list,
-        user: User,
-        conversation: Conversation,
-        use_rag: bool,
-        use_web_search: bool,
-        db: AsyncSession
+    message: str,
+    history: list,
+    user: User,
+    conversation_id,
+    use_rag: bool,
+    use_web_search: bool,
+    session_factory,
 ) -> AsyncGenerator[str, None]:
     """
     Async generator that runs the agent and yields SSE-formatted strings.
@@ -186,83 +194,100 @@ async def _generate_sse_stream(
     The double newline is the SSE event separator — required by the protocol.
     Without it, the client won't know where one event ends and the next begins.
     """
+
     full_response = ""
     final_citations = []
     total_tokens = 0
-
-    yield _sse(
-        type="metadata",
-        conversation_id=str(conversation.id)
-    )
+    stream_completed = False
 
     try:
-        async for chunk in run_agent_streaming(
-            message=message,
-            history=history,
-            user_id=str(user.id),
-            conversation_id=str(conversation.id),
-            use_rag=use_rag,
-            use_web_search=use_web_search
-        ):
-            chunk_type = chunk.get("type")
+        async with session_factory() as db:
+            conversation = await db.get(Conversation, conversation_id)
+            if conversation is None:
+                raise RuntimeError("Conversation not found")
 
-            if chunk_type == "token":
-                content = chunk.get("content", "")
-                full_response += content
-                total_tokens += len(content)
-                yield _sse(type="token", content=content)
+            yield _sse(
+                type="metadata",
+                conversation_id=str(conversation.id),
+            )
 
-            elif chunk_type == "tool_start":
-                yield _sse(
-                    type="tool_start",
-                    tool_name=chunk.get("tool_name")
-                )
+            async for chunk in run_agent_streaming(
+                message=message,
+                history=history,
+                user_id=str(user.id),
+                conversation_id=str(conversation.id),
+                use_rag=use_rag,
+                use_web_search=use_web_search
+            ):
+                chunk_type = chunk.get("type")
+
+                if chunk_type == "token":
+                    content = chunk.get("content", "")
+                    full_response += content
+                    total_tokens += len(content)  
+                    yield _sse(type="token", content=content)
+
+                elif chunk_type == "tool_start":
+                    yield _sse(
+                        type="tool_start",
+                        tool_name=chunk.get("tool_name")
+                    )
             
-            elif chunk_type == "done":
-                final_citations.extend(chunk.get("citations", []))
+                elif chunk_type == "done":
+                    final_citations.extend(chunk.get("citations", []))
+                    stream_completed = True
 
-                assistant_message = Message(
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=full_response,
-                    completion_tokens=total_tokens,
-                    citations=json.dumps(final_citations) if final_citations else None,
-                )
-                db.add(assistant_message)
+                elif chunk_type == "error":
+                    error_msg = chunk.get("error", "Unknown error")
+                    logger.error("chat.stream.agent_error", error=error_msg)
+                    yield _sse(type="error", error=error_msg)
+                    return 
+                
+            if not stream_completed:
+                    logger.warning(
+                        "chat.stream.incomplete",
+                        conversation_id=str(conversation.id),
+                    )
+                    return
 
-                await _update_usage(db, user.id, total_tokens)
+            assistant_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=full_response,
+                completion_tokens=total_tokens,
+                tool_call_data=json.dumps(
+                    {"citations": final_citations}
+                )  if final_citations else None,
+            )
+            db.add(assistant_message)
 
-                tools_used = []
-                if use_rag:
-                    tools_used.append("rag")
-                if use_web_search:
-                    tools_used.append("web_search")
-                conversation.tools_used = json.dumps(tools_used)
+            await _update_usage(db, user.id, total_tokens)
 
-                await db.commit()
+            tools_used = []
+            if use_rag:
+                tools_used.append("rag")
+            if use_web_search:
+                tools_used.append("web_search")
+            conversation.tools_used = json.dumps(tools_used)
 
-                logger.info(
-                    "chat.stream.complete",
-                    conversation_id=str(conversation.id),
-                    tokens=total_tokens,
-                    citations=len(final_citations)
-                )
+            await db.commit()
 
-                yield _sse(
-                    type="done",
-                    message_id=str(assistant_message.id),
-                    citations=final_citations
-                )
+            logger.info(
+                "chat.stream.complete",
+                conversation_id=str(conversation.id),
+                tokens=total_tokens,
+                citations=len(final_citations)
+            )
 
-            elif chunk_type == "error":
-                error_msg = chunk.get("error", "Unknown error")
-                logger.error("chat.stream.agent_error", error=error_msg)
-                yield _sse(type="error", error=error_msg)
+            yield _sse(
+                type="done",
+                message_id=str(assistant_message.id),
+                citations=final_citations
+            )
 
     except Exception as e:
         logger.error("chat.stream.error", error=str(e))
-        await db.rollback()
-        yield _sse(type="error", error="Something went wrong.Please try again")
+        yield _sse(type="error", error="Something went wrong. Please try again")
 
 def _sse(**kwargs) -> str:
     return f"data: {json.dumps(kwargs)}\n\n"

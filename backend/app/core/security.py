@@ -7,7 +7,7 @@ import hmac
 import hashlib
 import base64
 import time
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status, UploadFile
 from jose import JWTError, jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -348,7 +348,50 @@ def verify_clerk_webhook(
 
     return False
     
+async def validate_upload_file(file: UploadFile) -> tuple[str, bytes]:
 
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Filename is required",
+        )
+
+    # Get extension
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+
+    if ext not in settings.allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"File type '.{ext}' not allowed. Allowed: {', '.join(settings.allowed_extensions)}",
+        )
+
+    content = await file.read()
+
+    if len(content) > settings.max_upload_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum {settings.max_upload_size_mb}MB.",
+        )
+
+    if len(content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File is empty",
+        )
+
+    # Magic bytes check — confirms the file is actually what it claims to be
+    magic_bytes = {
+        "pdf":  b"%PDF",
+        "docx": b"PK\x03\x04",   # DOCX is a ZIP file internally
+    }
+    expected = magic_bytes.get(ext)
+    if expected and not content.startswith(expected):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"File content does not match .{ext} format",
+        )
+
+    return ext, content
 
 
 

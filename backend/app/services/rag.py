@@ -182,7 +182,10 @@ async def _embed_and_store(
         lambda: get_or_create_collection(client),
     )
 
-    embedding_model = get_embedding_model
+    embedding_model = await loop.run_in_executor(
+        None,
+        get_embedding_model,
+    )
 
     chunk_ids = [f"{document_id}_chunk_{i}" for i in range(len(chunks))]
 
