@@ -93,9 +93,9 @@ async def _web_search(
         max_results=max_results
     )
 
-    client = AsyncTavilyClient(api_key=settings.tavily_api_key)
-
     try:
+        client = AsyncTavilyClient(api_key=settings.tavily_api_key)
+        
         response = await client.search(
             query=clean_query,
             search_depth=search_depth,
