@@ -55,8 +55,7 @@ class Settings(BaseSettings):
 
     max_upload_size_mb: int = 20
     upload_dir: str = "./uploads"
-    allowed_file_types: str = "pdf, docx, txt, csv, md"
-
+    
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024
@@ -64,9 +63,10 @@ class Settings(BaseSettings):
     semantic_weight: float = 0.6   
     keyword_weight: float = 0.4  
 
+    allowed_file_types: str = "pdf, docx, txt, csv, md"
     @property
     def allowed_extensions(self) -> set[str]:
-         return set(self.allowed_file_types.split(","))  
+          return {ext.strip().lower() for ext in self.allowed_file_types.split(",") if ext.strip()} 
 
     @field_validator("secret_key")
     @classmethod
