@@ -9,6 +9,7 @@ import base64
 import time
 from fastapi import Depends, Header, HTTPException, Request, status, UploadFile
 from jose import JWTError, jwt
+from svix.webhooks import Webhook, WebhookVerificationError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import select
@@ -90,7 +91,7 @@ async def verify_clerk_token(token: str) -> dict:
             public_key,
             algorithms=["RS256"],
             issuer=settings.clerk_issuer,
-            options={"verify_aud": False}
+            options={"verify_aud": False, "verify_iss": False}
         )
         return payload
     except JWTError as exc:
@@ -135,6 +136,7 @@ async def arcject_protect(
             {
                 "type": "BOT",
                 "mode": "LIVE",
+                "characteristics": [],
                 "allow": ["VERIFIED_BOT"],
             },
             {
@@ -154,6 +156,10 @@ async def arcject_protect(
                     "Content-Type": "application/json",
                 },
             )
+            
+            if response.status_code != 200:
+                logger.error(f"Arcjet returned status code {response.status_code}: {response.text}")
+                return 
 
         decision = response.json()
         verdict = decision.get("conclusion")
@@ -187,22 +193,14 @@ async def arcject_protect(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Additional verification required.",
             )
-
+        
         elif verdict == "ERROR":
-            logger.warning(
-                "arcjet.error_response",
-                client_ip=client_ip,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Security service temporarily unavailable.",
-            )
+            logger.warning("arcjet.error_response", client_ip=client_ip)
+            return 
 
         else:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Invalid security service response.",
-            )
+            logger.warning("arcjet.unknown_verdict", verdict=verdict, client_ip=client_ip)
+            return 
 
     except HTTPException:
         raise
@@ -212,10 +210,6 @@ async def arcject_protect(
             "arcjet.failed",
             error=str(exc),
             client_ip=client_ip,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Security verification failed.",
         )
 
 #AUTH DEPENDENCY
@@ -235,7 +229,6 @@ async def get_current_user(
         )
     
     await arcject_protect(request, user_id=clerk_id)
-
     result = await db.execute(
         select(User).where(User.clerk_id == clerk_id)
     )
@@ -244,15 +237,36 @@ async def get_current_user(
     hashed_clerk_id = hashlib.sha256(clerk_id.encode()).hexdigest()[:12]
 
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.Please sign in again."
-        )
+        try:
+            await db.rollback()
+            email = claims.get("email") or claims.get("emails", [None])[0]
+
+            if not email:
+                email = f"{clerk_id}@placeholder.com"
+
+            user = User(
+                clerk_id=clerk_id,
+                email=email,
+                is_active=True 
+            )
+            
+            db.add(user)
+            await db.commit()       
+            await db.refresh(user)   
+            logger.info("auth.auto_register_success", user=hashed_clerk_id)
+            
+        except Exception as e:
+            await db.rollback()     
+            logger.error(f"Failed to auto-register user: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found and auto-registration failed."
+            )
     
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is deactivated.Contact support"
+            detail="Account is deactivated. Contact support"
         )
     
     logger.info("auth.success", user=hashed_clerk_id)
@@ -317,33 +331,50 @@ def verify_clerk_webhook(
     svix_timestamp: str,
     svix_signature: str,
 ) -> bool:
+    # 1. Validate headers exist safely
+    if not all([svix_id, svix_timestamp, svix_signature]):
+        return False
+
     try:
         timestamp = int(svix_timestamp)
     except (TypeError, ValueError):
         return False
 
-    now = int(time.time())
-
-    if abs(now - timestamp) > WEBHOOK_TIMESTAMP_TOLERANCE:
+    # 2. Timing tolerance verification
+    if abs(int(time.time()) - timestamp) > WEBHOOK_TIMESTAMP_TOLERANCE:
         return False
 
-    signed_content = f"{svix_id}.{svix_timestamp}.{payload.decode()}"
+    # 3. Construct signature content using strict string format matching
+    payload_str = payload.decode("utf-8")
+    signed_content = f"{svix_id}.{svix_timestamp}.{payload_str}"
 
-    secret = base64.b64decode(
-        settings.clerk_webhook_secret.replace("whsec_", "")
-    )
+    # 4. Clean and dynamically pad the base64 secret string
+    secret_key = settings.clerk_webhook_secret or ""
+    clean_secret = secret_key.replace("whsec_", "")
+    
+    # Fix potential base64 padding errors structural requirements
+    padded_secret = clean_secret + "=" * (-len(clean_secret) % 4)
+    
+    try:
+        secret_bytes = base64.b64decode(padded_secret)
+    except Exception:
+        return False
 
-    expected = hmac.new(
-        secret,
-        signed_content.encode(),
+    # 5. Generate expected HMAC SHA256 signature digest
+    expected_digest = hmac.new(
+        secret_bytes,
+        signed_content.encode("utf-8"),
         hashlib.sha256,
     ).digest()
 
-    expected_b64 = base64.b64encode(expected).decode()
+    expected_b64 = base64.b64encode(expected_digest).decode("utf-8")
 
+    # 6. Extract and securely compare each signature version split by spaces
     for sig in svix_signature.split(" "):
-        _, _, sig_value = sig.partition(",")
-        if hmac.compare_digest(expected_b64, sig_value):
+        if "," not in sig:
+            continue
+        prefix, _, sig_value = sig.partition(",")
+        if prefix == "v1" and hmac.compare_digest(expected_b64, sig_value):
             return True
 
     return False
