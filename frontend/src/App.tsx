@@ -43,7 +43,6 @@ export default function App() {
 
           <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
             <ChatPage
-              key={currentConvId || 'new'} 
               currentConvId={currentConvId}
               setCurrentConvId={setCurrentConvId}
               onNewConversation={triggerSidebarUpdate}

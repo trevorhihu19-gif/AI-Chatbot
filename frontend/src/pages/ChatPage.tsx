@@ -371,10 +371,14 @@ export default function ChatPage({
 
   useEffect(() => {
     if (!currentConvId) {
+    if (!loading) {
       setMessages([]);
-      setFetchingHistory(false);
-      return;
     }
+    setFetchingHistory(false);
+    return;
+  }
+
+    if (loading) return;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();

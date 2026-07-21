@@ -59,10 +59,11 @@ export default function Sidebar({ currentConvId, refreshTrigger, onNewChat, onSe
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  const del = async (e: React.MouseEvent, id: string) => {
+   const del = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
     setMenuOpenId(null)
     setConvs(p => p.filter(c => c.id !== id))
+    if (id === currentConvId) onNewChat()
     await api.deleteConversation(id).catch(() => {})
   }
 

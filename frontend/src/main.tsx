@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ClerkProvider, useAuth } from '@clerk/clerk-react'
 import { setTokenGetter } from './api'
@@ -13,7 +13,10 @@ if (!PUBLISHABLE_KEY) {
 
 export function TokenBridge() {
   const { getToken } = useAuth()
-  setTokenGetter(() => getToken())
+  
+  useEffect(() => {
+    setTokenGetter(() => getToken())
+  }, [getToken])
   return null
 }
 
