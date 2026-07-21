@@ -1,8 +1,9 @@
 import json
 import uuid
+import tiktoken
 from typing import AsyncGenerator, Optional
 import structlog
-from fastapi import APIRouter ,Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import select, desc
@@ -24,9 +25,21 @@ from app.services.agent import run_agent_streaming
 from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
+tokenizer = tiktoken.get_encoding("cl100k_base")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 MAX_HISTORY = 10
+
+PLAN_TOKEN_LIMITS = {
+    "free": 100_000,
+    "pro": 1_000_000,
+    "enterprise": 10_000_000,
+}
+
+def _count_tokens(text: str) -> int:
+    if not text:
+        return 0
+    return len(tokenizer.encode(text, disallowed_special=()))
 
 async def _get_or_create_conversation(
         db: AsyncSession,
@@ -34,10 +47,6 @@ async def _get_or_create_conversation(
         conversation_id: Optional[uuid.UUID],
         first_message: str
 ) -> Conversation:
-    """
-    Load an existing conversation or create a new one.
-    Auto-generates a title from the first message.
-    """
     if conversation_id:
         result = await db.execute(
             select(Conversation).where(
@@ -107,29 +116,30 @@ async def stream_chat(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    #sanitize text
     clean_message = sanitize_text(request_body.message)
 
-    #Check usage limits
+    # Check usage limits
     usage_result = await db.execute(
         select(UsageCredit).where(UsageCredit.user_id == current_user.id)
     )
     usage = usage_result.scalar_one_or_none()
 
-    # Ensure every user has a usage record
+    # Ensure every user has a usage record matching their tier limits explicitly
     if usage is None:
-        usage = UsageCredit(user_id=current_user.id)
+        usage = UsageCredit(
+            user_id=current_user.id,
+            tokens_limit=PLAN_TOKEN_LIMITS.get(getattr(current_user, "plan_tier", "free"), 100_000)
+        )
         db.add(usage)
         await db.commit()
         await db.refresh(usage)
 
-    if usage and usage.is_exhausted:
+    if usage and usage.tokens_used >= usage.tokens_limit:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="Monthly token limit reached.Please upgrade your plan."
+            detail="Monthly token limit reached. Please upgrade your plan."
         )
     
-    #load or create new conversation
     conversation = await _get_or_create_conversation(
         db=db,
         user=current_user,
@@ -137,10 +147,9 @@ async def stream_chat(
         first_message=clean_message
     )
 
-    #load chat history
     history = await _load_history(db, conversation.id)
 
-    #save the user's messages to the database
+    # Save user message to database
     user_message = Message(
         conversation_id=conversation.id,
         role="user",
@@ -157,7 +166,6 @@ async def stream_chat(
         use_web_search=request_body.use_web_search
     )
 
-    #Build and return the Server-Sent Events(SSE)
     return StreamingResponse(
         _generate_sse_stream(
             message=clean_message,
@@ -172,7 +180,7 @@ async def stream_chat(
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
-            "connection": "keep-alive",
+            "Connection": "keep-alive",
         }
     )
 
@@ -185,20 +193,13 @@ async def _generate_sse_stream(
     use_web_search: bool,
     session_factory,
 ) -> AsyncGenerator[str, None]:
-    """
-    Async generator that runs the agent and yields SSE-formatted strings.
-
-    SSE format:
-        data: <json>\n\n
-
-    The double newline is the SSE event separator — required by the protocol.
-    Without it, the client won't know where one event ends and the next begins.
-    """
-
     full_response = ""
     final_citations = []
-    total_tokens = 0
     stream_completed = False
+
+    # Calculate input prompt token weight context upfront
+    history_text = " ".join([m.content for m in history if hasattr(m, 'content')])
+    prompt_tokens = _count_tokens(message + " " + history_text)
 
     try:
         async with session_factory() as db:
@@ -224,7 +225,6 @@ async def _generate_sse_stream(
                 if chunk_type == "token":
                     content = chunk.get("content", "")
                     full_response += content
-                    total_tokens += len(content)  
                     yield _sse(type="token", content=content)
 
                 elif chunk_type == "tool_start":
@@ -244,24 +244,29 @@ async def _generate_sse_stream(
                     return 
                 
             if not stream_completed:
-                    logger.warning(
-                        "chat.stream.incomplete",
-                        conversation_id=str(conversation.id),
-                    )
-                    return
+                logger.warning(
+                    "chat.stream.incomplete",
+                    conversation_id=str(conversation.id),
+                )
+                return
+
+            # Compute output token metric and calculate complete cost
+            completion_tokens = _count_tokens(full_response)
+            total_tokens_spent = prompt_tokens + completion_tokens
 
             assistant_message = Message(
                 conversation_id=conversation.id,
                 role="assistant",
                 content=full_response,
-                completion_tokens=total_tokens,
+                completion_tokens=completion_tokens,
                 tool_call_data=json.dumps(
                     {"citations": final_citations}
-                )  if final_citations else None,
+                ) if final_citations else None,
             )
             db.add(assistant_message)
 
-            await _update_usage(db, user.id, total_tokens)
+            # Update credit metrics safely via row locking
+            await _update_usage(db, user.id, total_tokens_spent)
 
             tools_used = []
             if use_rag:
@@ -275,7 +280,7 @@ async def _generate_sse_stream(
             logger.info(
                 "chat.stream.complete",
                 conversation_id=str(conversation.id),
-                tokens=total_tokens,
+                tokens=total_tokens_spent,
                 citations=len(final_citations)
             )
 
@@ -368,8 +373,9 @@ async def delete_conversation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Conversation not found",
         )
-    async with transaction(db):
-        await db.delete(conv)
+    
+    await db.delete(conv)
+    await db.commit()
     
     logger.info(
         "conversation.deleted",
@@ -400,7 +406,3 @@ async def toggle_pin(
     async with transaction(db):
         conv.is_pinned = not conv.is_pinned
     return {"id": str(conv.id), "is_pinned": conv.is_pinned}
-
-   
-
-

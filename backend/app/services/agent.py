@@ -190,10 +190,10 @@ def should_use_tools(state: AgentState) -> str:
     return END
 
 def build_agent_graph(
-        use_web_search: bool = False,
-        use_rag: bool = True,
-        user_id: str = ""
-        ):
+    use_web_search: bool = False,
+    use_rag: bool = True,
+    user_id: str = ""
+):
     """
     Builds and compiles the LangGraph state graph.
 
@@ -208,11 +208,15 @@ def build_agent_graph(
 
     graph = StateGraph(AgentState)
 
-    graph.add_node(
-        "agent_node",
-        lambda state: agent_node(state, llm)
-    )
-    graph.add_node("tool_node", tool_node)
+    async def _run_agent(state: AgentState) -> dict:
+        return await agent_node(state, llm)
+
+    async def _run_tools(state: AgentState) -> dict:
+        return await tool_node(state)
+
+    graph.add_node("agent_node", _run_agent)
+    graph.add_node("tool_node", _run_tools)
+    
     graph.set_entry_point("agent_node")
     graph.add_conditional_edges(
         "agent_node",

@@ -55,5 +55,9 @@ class UsageCredit(Base):
             return 100.0
         return round((self.tokens_used / self.tokens_limit) * 100, 1)
     
+    @property
+    def is_exhausted(self) -> bool:
+        return self.tokens_used >= self.tokens_limit
+    
     def __repr__(self) -> str:
         return f"<UsageCredit used={self.tokens_used}/{self.tokens_limit}>"

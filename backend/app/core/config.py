@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     clerk_secret_key: str
     clerk_publishable_key: str
     clerk_webhook_secret: str
+    clerk_issuer: str
 
     groq_api_key: str
     groq_model: str = "openai/gpt-oss-120b"
