@@ -39,7 +39,7 @@ PLAN_TOKEN_LIMITS = {
 def _count_tokens(text: str) -> int:
     if not text:
         return 0
-    return len(tokenizer.encode(text))
+    return len(tokenizer.encode(text, disallowed_special=()))
 
 async def _get_or_create_conversation(
         db: AsyncSession,
